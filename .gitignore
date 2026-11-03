@@ -1,0 +1,21 @@
+# 依赖
+node_modules/
+
+# 临时与调试产物
+*.tmp
+*.log
+*.bak
+*.backup-*
+icon-preview.png
+icon-*.png
+pi-*.png
+pi.svg
+r.cjs
+render-*.cjs
+dbg.mjs
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,21 @@
+# dsh-skill-manager 组合包层（bundle layer）
+#
+# 安装进 profile 后由 dsh plugin add 应用。宿主行按包名解析（Node module
+# resolution）；客户端半由 package.json 的 dsh.client（platform: web）+
+# exports["./client"] 声明，无需在此重复声明。
+#
+# 层级提示：后应用的层按行胜出，patch 会整行替换 config —— 如需覆盖默认值，
+# 请重述所有键。
+
+- insert:
+    - id: skill-manager
+      name: dsh-skill-manager
+      config:
+        # 允许写入的 skill 根目录。留空 = 只允许默认的两个：
+        #   <DSH_HOME>/skills 与 <项目>/.dsh/skills
+        # 写入前会做路径穿越检查，越界的保存一律拒绝。
+        extraRoots: []
+        # false 时整页变只读：可以看、可以搜，但保存/删除按钮不可用。
+        allowWrite: true
+        # 单个 SKILL.md 的体积上限（字节）。
+        maxSkillBytes: 262144

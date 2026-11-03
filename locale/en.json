@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Skills",
+    "description": "Manage agent skills from the sidebar: browse every skill by source, read the full body, create and edit, and toggle model visibility without hand-editing SKILL.md."
+  }
+}

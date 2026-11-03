@@ -1,0 +1,49 @@
+{
+  "name": "dsh-skill-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Manage agent skills for DeepSeek Harness from a sidebar panel: browse every skill by source, read the full body, create, edit, delete, and enable or disable model invocation without hand-editing SKILL.md.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./skill-file": "./skill-file.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "skill-file.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "test/*.mjs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check skill-file.js && node --check client.js",
+    "test": "node test/host.test.mjs && node test/client.test.mjs && node test/import.test.mjs && node test/render.test.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "plugin",
+    "skill",
+    "manager"
+  ],
+  "license": "MIT"
+}

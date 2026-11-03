@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Skills">
+  <defs>
+    <linearGradient id="sm-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7e7d0"/>
+      <stop offset="0.55" stop-color="#fdf3e6"/>
+      <stop offset="1" stop-color="#ece0fa"/>
+    </linearGradient>
+    <linearGradient id="sm-wood" x1="20" y1="46" x2="44" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#cf9548"/>
+      <stop offset="1" stop-color="#f5d097"/>
+    </linearGradient>
+    <linearGradient id="sm-tip" x1="22" y1="48" x2="30" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3f3068"/>
+      <stop offset="1" stop-color="#7a5cb8"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#sm-bg)"/>
+
+  <!-- 斜放的画笔：笔杆左下 → 右上，约 45°。
+       小尺寸是主要考验：笔杆够粗、笔毛够长才在 20px 下仍读得出是画笔。 -->
+  <g transform="rotate(-45 32 32)">
+    <!-- 笔杆 -->
+    <rect x="27.6" y="11" width="8.8" height="31" rx="3.4" fill="url(#sm-wood)"/>
+    <rect x="28" y="11.6" width="8" height="30.2" rx="3.2" fill="none" stroke="#b57e35" stroke-width="1.3" opacity=".55"/>
+    <!-- 金属箍 -->
+    <rect x="26.8" y="41.2" width="10.4" height="5" rx="1.8" fill="#b9bfce"/>
+    <!-- 笔毛：拉长并加深，末端收成尖 -->
+    <path d="M26.9 46.2h10.2l-2.4 8.6a2.6 2.6 0 0 1-5.4 0z" fill="url(#sm-tip)"/>
+    <!-- 笔杆高光 -->
+    <rect x="29.4" y="13.4" width="2.2" height="26" rx="1.1" fill="#ffffff" opacity=".5"/>
+  </g>
+
+  <!-- 刚画过的一点颜色 -->
+  <circle cx="45.6" cy="47.4" r="3" fill="#7a5cb8" opacity=".5"/>
+  <circle cx="50.2" cy="42.8" r="1.7" fill="#7a5cb8" opacity=".3"/>
+</svg>
