@@ -245,12 +245,14 @@ test('页面能渲染到稳定态，且结构对', async () => {
   // 侧栏图标：必须画得出来，且不依赖插件 CSS 类。
   const icon = ui.PanelIcon({ size: 20 })
   assert.equal(classesOf(icon).size, 0, 'sidebar icon should not depend on plugin CSS classes')
-  // 图标是 emoji「🖊」：内容就是一个字形，没有其它可见文字；同时标记 aria-hidden，
-  // 屏幕阅读器不会把它读成一个字符。
-  assert.equal(textOf(icon).trim(), '\u{1F58A}', 'sidebar icon renders the pen emoji')
+  // 钢笔图标是粗描边 SVG：线条明确加粗，且不依赖 emoji 字形的系统渲染。
+  assert.equal(icon.type, 'svg', 'sidebar icon is a stroke-based pen')
+  assert.ok(Number(icon.props.strokeWidth) >= 2, 'pen lines must be visibly bold')
+  assert.equal(icon.props.stroke, 'currentColor', 'pen follows the sidebar color')
+  assert.equal(textOf(icon).trim(), '', 'line-art icon carries no text glyph')
   assert.equal(icon.props['aria-hidden'], 'true', 'icon is decorative for assistive tech')
-  assert.equal(icon.props.style.width, 20, 'icon follows the owner supplied size')
-  assert.equal(icon.props.style.height, 20, 'icon follows the owner supplied size')
+  assert.equal(icon.props.width, 20, 'icon follows the owner supplied size')
+  assert.equal(icon.props.height, 20, 'icon follows the owner supplied size')
 
   // 首帧（loading）必须渲染出标题与工具栏，不能抛错。
   env.harness.beginRender()

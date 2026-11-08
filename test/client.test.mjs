@@ -195,3 +195,27 @@ test('所有面向用户的文案都走翻译函数', () => {
   const cjkInMarkup = /h\('(?:h1|h2|h3|p|span|button|dt|dd)'[^)]*?'[\u4e00-\u9fff]/
   assert.ok(!cjkInMarkup.test(source), 'user-facing text must go through t()')
 })
+
+test('侧栏钢笔图标是加粗描边，不是细线 emoji', () => {
+  assert.match(source, /function PanelIcon\(\{ size = 20 \}\)/)
+  assert.match(source, /strokeWidth: 2\.4/, 'pen lines must be visibly bold')
+  const panelIcon = source.slice(source.indexOf('function PanelIcon('), source.indexOf('function makeUi('))
+  assert.ok(!panelIcon.includes('\u{1F58A}'), 'PanelIcon must not fall back to a thin monochrome emoji glyph')
+})
+
+test('导入浮层同时接收散装 Markdown 与整个技能文件夹', () => {
+  // 选择文件夹：原生 webkitdirectory 输入。
+  assert.match(source, /webkitdirectory: ''/, 'folder picker input missing')
+  // 拖放文件夹：DataTransferItem 递归读目录，且要反复 readEntries 直到空。
+  assert.match(source, /webkitGetAsEntry/, 'folder drop must traverse DataTransfer entries')
+  assert.match(source, /reader\.readEntries\(/, 'directory reader must drain all batches')
+  assert.match(source, /function splitSkillFolders\(/, 'folders must be split by SKILL.md')
+  // 混排条目一次提交，报告顺序与队列一一对应。
+  assert.match(source, /importItems: \(items, target, cwd\) => postJson\('\/skill\/import', \{ items, target, cwd \}\)/)
+  assert.match(source, /payload: \{ type: 'folder'/, 'folder payload missing')
+  assert.match(source, /payload: \{ type: 'file'/, 'loose file payload missing')
+  // 失败原因要翻译成中文，不能只丢错误码。
+  assert.match(source, /function importErrorText\(/)
+  assert.ok(DICT.zh.importPickFolder && DICT.en.importPickFolder, 'folder picker label must be localized')
+  assert.ok(DICT.zh.importErrNoSkillMd && DICT.en.importErrNoSkillMd, 'missing SKILL.md error must be localized')
+})

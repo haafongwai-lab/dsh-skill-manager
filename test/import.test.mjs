@@ -189,3 +189,146 @@ test('导入：只读模式下被拒绝', async () => {
     await rm(dshHome, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// 文件夹导入
+// ---------------------------------------------------------------------------
+
+test('导入：技能文件夹连同 SKILL.md 与附属文件一起落盘', async () => {
+  const dshHome = await mkdtemp(join(tmpdir(), 'sm-import-dir-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dshHome
+  try {
+    const plugin = await import('../index.js')
+    const server = await startPluginServer(plugin, { extraRoots: [], allowWrite: true, maxSkillBytes: 262144 })
+    try {
+      const skillMd = [
+        '---',
+        'name: folder-skill',
+        'description: "Use when: importing a folder"',
+        'allowed-tools: Read, Bash',
+        '# author comment',
+        '---',
+        '',
+        '# Body',
+        'text',
+      ].join('\n')
+      // 客户端把每个文件按二进制读成 base64，这里生成同样的载荷。
+      const b64 = (text) => Buffer.from(text, 'utf8').toString('base64')
+      const response = await post(server.base, '/dsh-skill-manager/api/skill/import', {
+        items: [{
+          type: 'folder',
+          name: 'folder-skill',
+          files: [
+            { path: 'SKILL.md', data: b64(skillMd) },
+            { path: 'references/guide.md', data: b64('# Guide\n\nmore') },
+            { path: 'scripts/run.py', data: b64('print(1)\n') },
+          ],
+        }],
+        target: 'user',
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(response.body.total, 1)
+      assert.equal(response.body.imported, 1)
+      assert.equal(response.body.created, 1)
+      const report = response.body.report[0]
+      assert.equal(report.ok, true)
+      assert.equal(report.kind, 'folder')
+      assert.equal(report.name, 'folder-skill')
+
+      const dir = join(dshHome, 'skills', 'folder-skill')
+      const written = await readFile(join(dir, 'SKILL.md'), 'utf8')
+      // 原文字节保留：不认识的元数据、注释、正文都还在，没有被重排。
+      assert.ok(written.includes('allowed-tools: Read, Bash'))
+      assert.ok(written.includes('# author comment'))
+      assert.ok(written.includes('# Body'))
+      // 附属文件按原相对路径落盘，脚本内容不被文本编码改坏。
+      assert.equal(await readFile(join(dir, 'references', 'guide.md'), 'utf8'), '# Guide\n\nmore')
+      assert.equal(await readFile(join(dir, 'scripts', 'run.py'), 'utf8'), 'print(1)\n')
+    } finally {
+      await server.close()
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await rm(dshHome, { recursive: true, force: true })
+  }
+})
+
+test('导入：混排条目逐条报告，缺 SKILL.md 与路径穿越都不写出去', async () => {
+  const dshHome = await mkdtemp(join(tmpdir(), 'sm-import-dir2-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dshHome
+  try {
+    const plugin = await import('../index.js')
+    const server = await startPluginServer(plugin, { extraRoots: [], allowWrite: true, maxSkillBytes: 262144 })
+    try {
+      const response = await post(server.base, '/dsh-skill-manager/api/skill/import', {
+        items: [
+          { type: 'folder', name: 'no-skill', files: [{ path: 'README.md', text: 'hi' }] },
+          {
+            type: 'folder',
+            name: 'evil',
+            files: [
+              { path: 'SKILL.md', text: '---\nname: evil\ndescription: d\n---\n\nbody' },
+              { path: '../../escape.txt', text: 'nope' },
+            ],
+          },
+          { type: 'file', name: 'good.md', text: '---\nname: good\ndescription: d\n---\n\nbody' },
+        ],
+        target: 'user',
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(response.body.total, 3)
+      assert.equal(response.body.imported, 1)
+      assert.equal(response.body.failed, 2)
+      // 报告顺序与 items 一一对应，队列才能对得上。
+      assert.equal(response.body.report[0].error, 'missing-skill-md')
+      assert.equal(response.body.report[1].error, 'invalid-path')
+      assert.equal(response.body.report[2].ok, true)
+      assert.equal(response.body.report[2].name, 'good')
+      // 越界文件没有落到技能根目录之外，坏文件夹也没写出半截技能。
+      await assert.rejects(readFile(join(dshHome, 'escape.txt'), 'utf8'))
+      await assert.rejects(readFile(join(dshHome, 'skills', 'evil', 'SKILL.md'), 'utf8'))
+    } finally {
+      await server.close()
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await rm(dshHome, { recursive: true, force: true })
+  }
+})
+
+test('导入：文件夹里的 SKILL.md 缺 name / description 时自动补齐', async () => {
+  const dshHome = await mkdtemp(join(tmpdir(), 'sm-import-dir3-'))
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = dshHome
+  try {
+    const plugin = await import('../index.js')
+    const server = await startPluginServer(plugin, { extraRoots: [], allowWrite: true, maxSkillBytes: 262144 })
+    try {
+      const response = await post(server.base, '/dsh-skill-manager/api/skill/import', {
+        items: [{
+          type: 'folder',
+          name: 'My Folder',
+          files: [{ path: 'SKILL.md', text: '# Notes\n\nA useful description from the body.' }],
+        }],
+        target: 'user',
+      })
+      assert.equal(response.body.imported, 1)
+      const written = await readFile(join(dshHome, 'skills', 'my-folder', 'SKILL.md'), 'utf8')
+      assert.match(written, /name: my-folder/)
+      assert.match(written, /description: A useful description from the body\./)
+      assert.ok(written.includes('# Notes'))
+    } finally {
+      await server.close()
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    await rm(dshHome, { recursive: true, force: true })
+  }
+})

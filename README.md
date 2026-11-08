@@ -12,9 +12,14 @@
 - **详情浮层**：全文（frontmatter 原文 + 正文）、绝对路径、来源与提供者、
   调用策略。只读来源的技能在这里看得到，但没有编辑按钮。
 - **编辑器浮层**：名字、描述、何时使用、正文、保存位置；`⌘/Ctrl + Enter` 保存。
-- **导入 Markdown**：把 `.md` 文件拖进浮层或点选，一次可导多个。带 frontmatter
-  的按里面的 `name` / `description` 建；没有的用文件名当名字、正文首段当描述。
-  同名技能覆盖，报告里区分「新增 / 覆盖 / 失败」。
+- **导入 Markdown 或文件夹**：把 `.md` 文件拖进浮层，或用「选择文件 /
+  选择文件夹」按钮一次选多个；也可以直接拖一个技能文件夹（甚至一个装着多
+  个技能文件夹的父目录）。带 frontmatter 的按里面的 `name` / `description`
+  建；没有的用文件名 / 文件夹名当名字、正文首段当描述。同名技能覆盖，报告里
+  区分「新增 / 覆盖 / 失败」。
+  文件夹必须含 `SKILL.md`，其余 `references/` `scripts/` `assets/` 等文件会
+  按原相对路径一并写入；`SKILL.md` 保留原文字节（只补缺失的 name /
+  description），不会把别人技能里的元数据、注释、脚本重排成插件生成的样子。
 - **启停**：写 SKILL.md 的 `disable-model-invocation`，模型目录真的会少一项。
 
 ## 设计要点
@@ -51,6 +56,17 @@ MCP 管理、技能管理三个插件共用过这段复制代码，症状一致�
 **写入是原子的。** 临时文件 + `rename`，按文件串行化；名字先过
 `^[a-z0-9]+(?:-[a-z0-9]+)*$`，路径再做穿越检查，越界的保存一律拒绝。
 
+**文件夹导入按二进制搬运。** 浏览器侧用 `webkitdirectory`（选择）与
+`DataTransferItem.webkitGetAsEntry`（拖放）递归读完整个目录，每个文件读成
+base64；Host 侧解码后原样写出。路径先过 `safeRelativePath`（拒 `..`、
+绝对路径、盘符、Windows 保留字符），再用 `insideRoot` 复核，单个文件夹限
+100 个文件 / 4 MiB。`SKILL.md` 仍走 `writeSkill` 的校验与原子写，其余文件
+按相对路径落到同一个技能目录 —— 保存与导入不会分叉成两套规则。
+
+**侧栏钢笔是粗描边 SVG。** U+1F58A 默认是文本呈现字符，很多系统会用单色
+细线字形渲染，20px 下比旁边图标轻一截。现在用 `strokeWidth: 2.4` 的
+线描钢笔代替，`icon.svg` 的轮廓线也一并加粗。
+
 **只读来源不给删除。** bundled 与插件运行时注册的技能不落在可写根里，面板上
 不提供删除按钮，Host 侧也会再拒一次。
 
@@ -63,7 +79,7 @@ MCP 管理、技能管理三个插件共用过这段复制代码，症状一致�
 | GET | `/skills?cwd=` | 全部技能（合并视图 + 可写性 + 覆盖层） |
 | GET | `/skill?name=` | 全文、绝对路径、frontmatter 原文 |
 | POST | `/skill/save` | 新建或更新 |
-| POST | `/skill/import` | 批量导入 Markdown（`{ files: [{name, text}], target }`） |
+| POST | `/skill/import` | 批量导入（`{ items: [{type:'file',name,text} \| {type:'folder',name,files:[{path,data}]}], target }`；也兼容旧的 `{ files: [{name,text}] }`） |
 | POST | `/skill/delete` | 删除 |
 | POST | `/skill/toggle` | 启停模型可见性 |
 
@@ -85,6 +101,7 @@ MCP 管理、技能管理三个插件共用过这段复制代码，症状一致�
 node --check index.js; node --check skill-file.js; node --check client.js
 node test/host.test.mjs
 node test/client.test.mjs
+node test/import.test.mjs
 node test/render.test.mjs
 ```
 

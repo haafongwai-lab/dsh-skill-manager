@@ -1,8 +1,8 @@
 {
   "name": "dsh-skill-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Manage agent skills for DeepSeek Harness from a sidebar panel: browse every skill by source, read the full body, create, edit, delete, and enable or disable model invocation without hand-editing SKILL.md.",
+  "description": "Manage agent skills for DeepSeek Harness from a sidebar panel: browse every skill by source, read the full body, create, edit, delete, import Markdown files or whole skill folders, and enable or disable model invocation without hand-editing SKILL.md.",
   "type": "module",
   "main": "index.js",
   "exports": {

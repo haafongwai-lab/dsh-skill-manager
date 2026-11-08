@@ -131,6 +131,47 @@ export function normalizeName(input) {
 }
 
 /**
+ * 补齐导入技能的 frontmatter，但尽量保留原文字节。
+ *
+ * 文件夹导入最怕「导入完技能变样」：别的工具生成的 SKILL.md 常带平台不认识
+ * 的元数据（allowed-tools、license…），整份重写会把它们连同用户写的注释一起
+ * 冲掉。这里只在 name / description 缺失或为空时补行，其余 frontmatter 与
+ * 正文原样保留；连 whenToUse / disable-model-invocation 也只是按需补，不覆盖。
+ */
+export function ensureSkillFrontmatter(raw, { name, description, whenToUse, modelInvocable }) {
+  const text = String(raw).replace(/^\uFEFF/, '')
+
+  function patch(lines, key, value) {
+    const pattern = new RegExp(`^\\s*${key}\\s*:`, 'i')
+    const index = lines.findIndex((line) => pattern.test(line))
+    if (index >= 0) {
+      const current = lines[index].slice(lines[index].indexOf(':') + 1).trim()
+      if (current.length === 0) lines[index] = `${key}: ${quoteYaml(value)}`
+      return
+    }
+    lines.push(`${key}: ${quoteYaml(value)}`)
+  }
+
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+  if (match) {
+    const head = match[1].split(/\r?\n/)
+    patch(head, 'name', name)
+    patch(head, 'description', description)
+    const hasWhen = head.some((line) => /^\s*(whenToUse|when-to-use)\s*:/i.test(line))
+    if (whenToUse && !hasWhen) head.push(`whenToUse: ${quoteYaml(whenToUse)}`)
+    const hasDisable = head.some((line) => /^\s*disable-model-invocation\s*:/i.test(line))
+    if (modelInvocable === false && !hasDisable) head.push('disable-model-invocation: true')
+    return `---\n${head.join('\n')}\n---${text.slice(match[0].length)}`
+  }
+
+  // 没有 frontmatter：补一段最小头，正文一个字都不动。
+  const head = [`name: ${quoteYaml(name)}`, `description: ${quoteYaml(description)}`]
+  if (whenToUse) head.push(`whenToUse: ${quoteYaml(whenToUse)}`)
+  if (modelInvocable === false) head.push('disable-model-invocation: true')
+  return `---\n${head.join('\n')}\n---\n\n${text}`
+}
+
+/**
  * 只改 `disable-model-invocation` 这一行，其余字节原样保留。
  *
  * 整份重写会把用户手写的排版、注释、其它元数据全部冲掉 —— 一次「停用」

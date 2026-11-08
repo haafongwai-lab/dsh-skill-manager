@@ -121,22 +121,29 @@ window.__ModuleLoader__.load({
         errTooLarge: '技能文件太大了。',
         errNotFound: '这个技能已经不在了。',
         readOnlyBanner: '只读模式：可以查看，不能修改。',
-        importTitle: '导入 Markdown',
-        importHint: '把 .md 文件拖进来，或点下面选择。带 frontmatter 的会按里面的 name / description 建；没有的用文件名当名字。同名技能会被覆盖。',
+        importTitle: '导入技能',
+        importHint: '把 .md 文件或技能文件夹拖进来，也可以用下面的按钮选择。同名技能会被覆盖。',
+        importDropHint: '文件夹需含 SKILL.md，其余文件会一并导入',
         importPick: '选择文件',
+        importPickFolder: '选择文件夹',
         importDrop: '拖到这里',
-        importQueue: '{n} 个文件待导入',
+        importQueue: '{n} 项待导入',
         importRun: '开始导入',
         importClose: '关闭',
-        importEmpty: '还没有选择文件。',
+        importEmpty: '还没有选择文件或文件夹。',
         importTarget: '导入到',
         importDone: '导入完成：新增 {created} 个，覆盖 {updated} 个',
         importPartial: '导入 {n} 个，{failed} 个失败',
         importFailed: '全部导入失败',
-        importTooMany: '一次最多导入 200 个文件。',
+        importTooMany: '一次最多导入 200 项。',
         importReportCreated: '新增',
         importReportUpdated: '覆盖',
         importReportFailed: '失败',
+        importFolderCount: '{name}（{n} 个文件）',
+        importErrNoSkillMd: '缺少 SKILL.md',
+        importErrInvalidPath: '文件路径不合法',
+        importErrTooManyFiles: '文件夹里文件太多',
+        importErrTooLarge: '文件夹太大',
         importClear: '清空',
       },
       en: {
@@ -211,22 +218,29 @@ window.__ModuleLoader__.load({
         errTooLarge: 'That skill file is too large.',
         errNotFound: 'That skill is gone already.',
         readOnlyBanner: 'Read-only mode: browse allowed, edits are not.',
-        importTitle: 'Import Markdown',
-        importHint: 'Drop .md files here, or pick them below. Files with frontmatter use its name / description; files without it use the filename. Same-name skills are overwritten.',
+        importTitle: 'Import skills',
+        importHint: 'Drop .md files or whole skill folders here, or pick them below. Same-name skills are overwritten.',
+        importDropHint: 'A folder needs SKILL.md; its other files come along',
         importPick: 'Choose files',
+        importPickFolder: 'Choose folder',
         importDrop: 'Drop here',
-        importQueue: '{n} file(s) ready',
+        importQueue: '{n} item(s) ready',
         importRun: 'Import',
         importClose: 'Close',
-        importEmpty: 'No files selected yet.',
+        importEmpty: 'No files or folders selected yet.',
         importTarget: 'Import to',
         importDone: 'Imported: {created} new, {updated} overwritten',
         importPartial: 'Imported {n}, {failed} failed',
         importFailed: 'Nothing was imported',
-        importTooMany: 'At most 200 files per import.',
+        importTooMany: 'At most 200 items per import.',
         importReportCreated: 'new',
         importReportUpdated: 'overwritten',
         importReportFailed: 'failed',
+        importFolderCount: '{name} ({n} files)',
+        importErrNoSkillMd: 'Missing SKILL.md',
+        importErrInvalidPath: 'Invalid file path',
+        importErrTooManyFiles: 'Too many files in the folder',
+        importErrTooLarge: 'That folder is too large',
         importClear: 'Clear',
       },
     }
@@ -288,6 +302,12 @@ window.__ModuleLoader__.load({
       'read-only-skill': 'readOnlySkill',
       'too-large': 'errTooLarge',
       'not-found': 'errNotFound',
+      // 文件夹导入的失败原因：逐条显示在队列里，别只丢一个英文错误码。
+      'missing-skill-md': 'importErrNoSkillMd',
+      'empty-folder': 'importErrNoSkillMd',
+      'invalid-path': 'importErrInvalidPath',
+      'too-many-folder-files': 'importErrTooManyFiles',
+      'folder-too-large': 'importErrTooLarge',
     }
 
     async function apiJson(path, options = {}) {
@@ -323,7 +343,8 @@ window.__ModuleLoader__.load({
       list: (cwd) => apiJson(`/skills${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
       get: (name, cwd) => apiJson(`/skill?name=${encodeURIComponent(name)}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`),
       save: (payload) => postJson('/skill/save', payload),
-      importFiles: (files, target, cwd) => postJson('/skill/import', { files, target, cwd }),
+      // items 是「散装文件 / 文件夹」混排，顺序即报告顺序。
+      importItems: (items, target, cwd) => postJson('/skill/import', { items, target, cwd }),
       remove: (name, cwd, target) => postJson('/skill/delete', { name, cwd, target }),
       toggle: (name, enabled, cwd) => postJson('/skill/toggle', { name, enabled, cwd }),
     }
@@ -335,6 +356,12 @@ window.__ModuleLoader__.load({
     function errorText(error, t) {
       const key = error && error.code ? ERROR_KEY[error.code] : undefined
       return key ? t(key) : t('errGeneric')
+    }
+
+    /** 导入报告里的错误码：认识的说人话，不认识的保留原文便于排查。 */
+    function importErrorText(code, t) {
+      const key = ERROR_KEY[code]
+      return key ? t(key) : (code || t('errGeneric'))
     }
 
     function isMac() {
@@ -457,33 +484,41 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M13.4 3.8v4h4' }))
     }
 
+    /** 导入队列里的文件夹条目。 */
+    function FolderIcon({ size = 13 }) {
+      return h('svg', strokeProps(size),
+        h('path', { d: 'M3.8 6.6a1.4 1.4 0 0 1 1.4-1.4h3.3l1.9 2.1h7.8a1.4 1.4 0 0 1 1.4 1.4v9.5a1.4 1.4 0 0 1-1.4 1.4H5.2a1.4 1.4 0 0 1-1.4-1.4z' }))
+    }
+
     /**
-     * 侧边栏图标：直接用 emoji「🖊」。
+     * 侧边栏图标：一支粗线条的钢笔。
      *
-     * 之前手画的 SVG 描边版在 20px 下总被读成「箭头」—— 笔画挤在一起，
-     * 加粗、拉长、缩笔毛都救不回来。emoji 由系统字体渲染，形状天生正确，
-     * 不再需要为小尺寸调曲线。
+     * 之前用 emoji 的 U+1F58A 字符：它默认是文本呈现字符，不少系统会拿单色字形
+     * 渲染，20px 下只剩几条细线，看着比旁边所有图标都轻 —— 用户要的就是把
+     * 线条加粗。现在改回 SVG 描边，但把 stroke 明确钉到 2.4（24 视框，
+     * 20px 下约 2px），笔杆与笔尖留足留白，小尺寸才不会糊成一团读成箭头。
      *
      * 保留 `size` 参数：sidebar.panellist 的 owner 会传 20（或侧栏收窄时的
-     * 其它尺寸），字号跟着它走，才能和旁边几个图标对齐。
+     * 其它尺寸），宽高跟着它走，才能和旁边几个图标对齐。
      */
     function PanelIcon({ size = 20 }) {
-      return h('span', {
+      return h('svg', {
+        viewBox: '0 0 24 24',
+        width: size,
+        height: size,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 2.4,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
         'aria-hidden': 'true',
-        style: {
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: size,
-          height: size,
-          // 略小于格子：emoji 字形本身带内边距，占满会显得比邻居大一圈。
-          fontSize: Math.round(size * 0.9),
-          lineHeight: 1,
-          // 不继承 currentColor：这是彩色 emoji，染色会破坏字形里的层次。
-          // 侧栏选中态本来就靠背景块表达，不依赖图标颜色。
-          userSelect: 'none',
-        },
-      }, '\u{1F58A}')
+        focusable: 'false',
+        style: { display: 'inline-block', verticalAlign: 'middle' },
+      },
+        // 笔身：右上 → 左下的斜置钢笔，末端收成笔尖。
+        h('path', { d: 'M16.4 3.6a2.2 2.2 0 0 1 3.1 3.1L9.9 16.3 4.3 19.6l3.3-5.6z' }),
+        // 笔帽接缝：一条粗线把笔杆和笔尖分开。
+        h('path', { d: 'M14.6 5.4 18.6 9.4' }))
     }
 
     // -----------------------------------------------------------------------
@@ -756,11 +791,11 @@ window.__ModuleLoader__.load({
           })
         }
 
-        async function runImport(files, target) {
-          if (!files || files.length === 0) return
+        async function runImport(items, target) {
+          if (!items || items.length === 0) return
           setImporter((current) => (current ? { ...current, busy: true, result: null } : current))
           try {
-            const body = await api.importFiles(files, target)
+            const body = await api.importItems(items.map((item) => item.payload), target)
             setImporter((current) => (current ? { ...current, busy: false, result: body } : current))
             if (body.imported > 0) {
               for (const entry of body.report || []) if (entry.ok) markLanding(entry.name)
@@ -861,7 +896,7 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   title: translate('importTitle'),
                   'aria-label': translate('importTitle'),
-                  onClick: () => setImporter({ files: [], target: (roots.find((root) => root.id === 'user') || roots[0] || {}).id || 'user', result: null, busy: false }),
+                  onClick: () => setImporter({ items: [], target: (roots.find((root) => root.id === 'user') || roots[0] || {}).id || 'user', result: null, busy: false }),
                 }, h(ImportIcon, null))
                 : null,
               h('button', {
@@ -1067,7 +1102,7 @@ window.__ModuleLoader__.load({
             roots,
             translate,
             onChange: (patch) => setImporter((current) => (current ? { ...current, ...patch } : current)),
-            onRun: (files, target) => { void runImport(files, target) },
+            onRun: (items, target) => { void runImport(items, target) },
             onClose: () => setImporter(null),
           }) : null,
 
@@ -1147,43 +1182,194 @@ window.__ModuleLoader__.load({
             }, translate('detailClose'))))))
       }
 
+      // ---------------------------------------------------------------------
+      // 文件夹导入：浏览器里把整棵目录读成 base64，再按 SKILL.md 切成技能。
+      // 前端只负责「搬运」，frontmatter 解析与落盘仍全在 Host，避免两套规则。
+      // ---------------------------------------------------------------------
+
+      /** 散装 Markdown 读成 UTF-8 文本。 */
+      function readTextFile(file) {
+        return new Promise((resolve) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve({ name: file.name, text: String(reader.result || '') })
+          reader.onerror = () => resolve({ name: file.name, text: '' })
+          reader.readAsText(file, 'utf-8')
+        })
+      }
+
+      /** 文件夹里的文件一律按二进制读，脚本 / 图片才不会被文本编码改坏。 */
+      function readBase64File(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onerror = () => reject(new Error('read-failed'))
+          reader.onload = () => {
+            const bytes = new Uint8Array(reader.result || new ArrayBuffer(0))
+            let binary = ''
+            const chunk = 0x8000
+            for (let i = 0; i < bytes.length; i += chunk) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk))
+            }
+            resolve(btoa(binary))
+          }
+          reader.readAsArrayBuffer(file)
+        })
+      }
+
       /**
-       * 导入浮层：选文件 → 预览队列 → 导入 → 逐条报告。
+       * 递归读一个 DataTransfer 目录项。
+       * Chrome 的 readEntries 每次最多回 100 条，必须反复读到空数组为止。
+       */
+      function readEntry(entry, prefix, out) {
+        return new Promise((resolve) => {
+          if (entry.isFile) {
+            entry.file((file) => {
+              out.push({ path: prefix + entry.name, file })
+              resolve()
+            }, () => resolve())
+            return
+          }
+          if (!entry.isDirectory) {
+            resolve()
+            return
+          }
+          const reader = entry.createReader()
+          const children = []
+          const readBatch = () => reader.readEntries((batch) => {
+            if (!batch || batch.length === 0) {
+              Promise.all(children.map((child) => readEntry(child, `${prefix}${entry.name}/`, out))).then(resolve, resolve)
+              return
+            }
+            children.push(...batch)
+            readBatch()
+          }, () => resolve())
+          readBatch()
+        })
+      }
+
+      /** 凡直接含 SKILL.md 的目录算一个技能；一个父文件夹可切出多个技能。 */
+      function splitSkillFolders(entries, label) {
+        const markers = entries.filter((entry) => /(^|\/)SKILL\.md$/i.test(entry.path))
+        if (markers.length === 0) return { bundles: [], missing: label }
+        const bundles = markers.map((marker) => {
+          const root = marker.path.replace(/\/?SKILL\.md$/i, '')
+          const prefix = root ? `${root}/` : ''
+          const name = root ? root.split('/').filter(Boolean).pop() : (label || 'skill')
+          const files = entries
+            .filter((entry) => entry.path.startsWith(prefix))
+            .map((entry) => ({ path: entry.path.slice(prefix.length), file: entry.file }))
+            .filter((entry) => entry.path.length > 0)
+          return { name, files }
+        })
+        return { bundles: bundles.filter((bundle) => bundle.files.length > 0), missing: null }
+      }
+
+      /**
+       * 导入浮层：选文件 / 选文件夹 → 预览队列 → 导入 → 逐条报告。
        *
-       * 文件只在浏览器里读成文本，再整批 POST 给 Host 解析落盘 —— 前端不做
-       * frontmatter 解析，避免和 Host 各有一套规则。
+       * 队列里混排两种条目：`file`（一个 .md 一条技能）与 `folder`（一个含
+       * SKILL.md 的目录一条技能）。两者都只在这里读成数据，解析落盘交给 Host。
        */
       function ImportDialog({ state, roots, translate, onChange, onRun, onClose }) {
         const ref = useDialog(onClose, true)
-        const inputRef = React.useRef(null)
+        const fileInputRef = React.useRef(null)
+        const folderInputRef = React.useRef(null)
+        const keyRef = React.useRef(0)
         const [dragging, setDragging] = React.useState(false)
 
-        const files = state.files || []
+        const items = state.items || []
         const result = state.result
 
-        /** 读取选中的 .md / .markdown / .txt 文件为纯文本。 */
-        function takeFiles(list) {
-          const picked = []
-          const incoming = Array.from(list || [])
-          for (const file of incoming) {
-            if (!/\.(md|markdown|txt)$/i.test(file.name)) continue
-            picked.push(file)
+        function nextKey() {
+          keyRef.current += 1
+          return `item-${keyRef.current}`
+        }
+
+        function addItems(newItems) {
+          if (newItems.length === 0) return
+          onChange({ items: [...items, ...newItems].slice(0, 200), result: null })
+        }
+
+        /** 一组散装文件 → 队列条目。 */
+        function textItems(list) {
+          const picked = Array.from(list || []).filter((file) => /\.(md|markdown|txt)$/i.test(file.name))
+          if (picked.length === 0) return Promise.resolve([])
+          return Promise.all(picked.map(readTextFile)).then((entries) => entries.map((entry) => ({
+            key: nextKey(),
+            kind: 'file',
+            name: entry.name,
+            count: 1,
+            payload: { type: 'file', name: entry.name, text: entry.text },
+          })))
+        }
+
+        /** 一组 { path, file } → 队列条目（按 SKILL.md 切成多个技能）。 */
+        function folderItems(entries, label) {
+          const split = splitSkillFolders(entries, label)
+          if (split.missing) {
+            // 没找到 SKILL.md 也要在队列里给个说法，不能静默丢掉。
+            return Promise.resolve([{
+              key: nextKey(),
+              kind: 'folder',
+              name: split.missing,
+              count: 0,
+              invalid: true,
+              payload: { type: 'folder', name: split.missing, files: [] },
+            }])
           }
-          if (picked.length === 0) return
-          Promise.all(picked.map((file) => new Promise((resolve) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve({ name: file.name, text: String(reader.result || '') })
-            reader.onerror = () => resolve({ name: file.name, text: '' })
-            reader.readAsText(file, 'utf-8')
-          }))).then((entries) => {
-            onChange({ files: [...files, ...entries].slice(0, 200), result: null })
-          })
+          return Promise.all(split.bundles.map(async (bundle) => {
+            const files = []
+            for (const entry of bundle.files) {
+              try {
+                files.push({ path: entry.path, data: await readBase64File(entry.file) })
+              } catch {
+                /* 单个文件读失败：整包交给 Host 按缺失报错 */
+              }
+            }
+            return {
+              key: nextKey(),
+              kind: 'folder',
+              name: bundle.name,
+              count: files.length,
+              payload: { type: 'folder', name: bundle.name, files },
+            }
+          }))
+        }
+
+        function takeFiles(list) {
+          textItems(list).then(addItems)
+        }
+
+        /** <input webkitdirectory>：webkitRelativePath 带根文件夹名。 */
+        function takeFolderInput(list) {
+          const incoming = Array.from(list || [])
+          if (incoming.length === 0) return
+          const first = incoming[0].webkitRelativePath || incoming[0].name || ''
+          const label = first.split('/')[0] || 'skill'
+          const entries = incoming.map((file) => ({ path: file.webkitRelativePath || file.name, file }))
+          folderItems(entries, label).then(addItems)
         }
 
         function onDrop(event) {
           event.preventDefault()
           setDragging(false)
-          takeFiles(event.dataTransfer && event.dataTransfer.files)
+          const dt = event.dataTransfer
+          if (!dt) return
+          const list = dt.items ? Array.from(dt.items) : []
+          const entries = list
+            .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+            .filter(Boolean)
+          if (!entries.some((entry) => entry.isDirectory)) {
+            takeFiles(dt.files)
+            return
+          }
+          const out = []
+          Promise.all(entries.map((entry) => readEntry(entry, '', out))).then(async () => {
+            const label = (entries.find((entry) => entry.isDirectory) || {}).name || 'skill'
+            const loose = out.filter((entry) => !entry.path.includes('/')).map((entry) => entry.file)
+            // 一次 addItems：两条异步路径合并，避免互相覆盖队列。
+            const [files, folders] = await Promise.all([textItems(loose), folderItems(out, label)])
+            addItems([...files, ...folders])
+          })
         }
 
         return h('div', {
@@ -1213,7 +1399,7 @@ window.__ModuleLoader__.load({
             onClick: onClose,
           }, h(CloseIcon, null))),
         h('div', { className: 'sm-dialog-body' },
-          // 拖放区
+          // 拖放区：文件与整个文件夹都能拖进来。
           h('div', {
             className: `sm-drop${dragging ? ' is-over' : ''}`,
             onDragOver: (event) => {
@@ -1222,25 +1408,29 @@ window.__ModuleLoader__.load({
             },
             onDragLeave: () => setDragging(false),
             onDrop,
-            onClick: () => {
-              const node = inputRef.current
-              if (node && typeof node.click === 'function') node.click()
-            },
-            role: 'button',
-            tabIndex: 0,
-            onKeyDown: (event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                const node = inputRef.current
-                if (node && typeof node.click === 'function') node.click()
-              }
-            },
           },
           h('span', { className: 'sm-drop-icon' }, h(ImportIcon, { size: 20 })),
           h('span', { className: 'sm-drop-text' }, translate('importDrop')),
-          h('span', { className: 'sm-drop-hint' }, translate('importPick')),
+          h('span', { className: 'sm-drop-hint' }, translate('importDropHint')),
+          h('div', { className: 'sm-drop-actions' },
+            h('button', {
+              className: 'sm-drop-btn',
+              type: 'button',
+              onClick: () => {
+                const node = fileInputRef.current
+                if (node && typeof node.click === 'function') node.click()
+              },
+            }, translate('importPick')),
+            h('button', {
+              className: 'sm-drop-btn',
+              type: 'button',
+              onClick: () => {
+                const node = folderInputRef.current
+                if (node && typeof node.click === 'function') node.click()
+              },
+            }, translate('importPickFolder'))),
           h('input', {
-            ref: inputRef,
+            ref: fileInputRef,
             type: 'file',
             accept: '.md,.markdown,.txt,text/markdown',
             multiple: true,
@@ -1250,32 +1440,47 @@ window.__ModuleLoader__.load({
               // 清空，让同一个文件能再选一次。
               event.target.value = ''
             },
+          }),
+          h('input', {
+            ref: folderInputRef,
+            type: 'file',
+            webkitdirectory: '',
+            directory: '',
+            multiple: true,
+            className: 'sm-file-input',
+            onChange: (event) => {
+              takeFolderInput(event.target.files)
+              event.target.value = ''
+            },
           })),
 
-          files.length > 0
+          items.length > 0
             ? h('div', { className: 'sm-import-queue' },
               h('div', { className: 'sm-import-queue-head' },
-                h('span', null, translate('importQueue', { n: files.length })),
+                h('span', null, translate('importQueue', { n: items.length })),
                 h('button', {
                   className: 'sm-link',
                   type: 'button',
-                  onClick: () => onChange({ files: [], result: null }),
+                  onClick: () => onChange({ items: [], result: null }),
                 }, translate('importClear'))),
               h('ul', { className: 'sm-file-list' },
-                files.map((file, index) => {
+                items.map((item, index) => {
                   const entry = result && result.report ? result.report[index] : null
+                  const label = item.kind === 'folder'
+                    ? translate('importFolderCount', { name: item.name, n: item.count })
+                    : item.name
                   return h('li', {
-                    key: `${file.name}-${index}`,
+                    key: item.key || `${item.name}-${index}`,
                     className: 'sm-file-row',
                     'data-state': entry ? (entry.ok ? (entry.created ? 'new' : 'updated') : 'failed') : 'pending',
                   },
-                  h('span', { className: 'sm-file-icon' }, h(FileIcon, null)),
-                  h('span', { className: 'sm-file-name', title: file.name }, file.name),
+                  h('span', { className: 'sm-file-icon' }, h(item.kind === 'folder' ? FolderIcon : FileIcon, null)),
+                  h('span', { className: 'sm-file-name', title: label }, label),
                   h('span', { className: 'sm-file-status' },
                     entry
                       ? (entry.ok
                         ? translate(entry.created ? 'importReportCreated' : 'importReportUpdated')
-                        : `${translate('importReportFailed')}${entry.error ? ` · ${entry.error}` : ''}`)
+                        : `${translate('importReportFailed')} · ${importErrorText(entry.error, translate)}`)
                       : ''))
                 })))
             : h('p', { className: 'sm-status' }, translate('importEmpty')),
@@ -1297,7 +1502,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'sm-dialog-stamp' },
             result
               ? translate('importDone', { created: result.created, updated: result.updated })
-              : translate('importQueue', { n: files.length })),
+              : translate('importQueue', { n: items.length })),
           h('div', { className: 'sm-dialog-actions' },
             h('button', {
               className: 'sm-dialog-btn',
@@ -1307,8 +1512,8 @@ window.__ModuleLoader__.load({
             h('button', {
               className: 'sm-dialog-btn primary',
               type: 'button',
-              disabled: state.busy || files.length === 0,
-              onClick: () => onRun(files, state.target),
+              disabled: state.busy || items.length === 0,
+              onClick: () => onRun(items, state.target),
             }, state.busy ? translate('loading') : translate('importRun'))))))
       }
 
@@ -1555,13 +1760,18 @@ window.__ModuleLoader__.load({
 .sm-toast{position:sticky;bottom:16px;z-index:5;display:flex;align-items:center;gap:12px;align-self:center;width:fit-content;max-width:100%;margin:0 auto;padding:8px 10px 8px 14px;border-radius:999px;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);box-shadow:0 8px 24px rgba(0,0,0,.14);font-size:12.5px;line-height:18px;animation:sm-rise .16s ease-out}
 .sm-page>.sm-toast{width:fit-content;max-width:min(100%,720px)}
 /* 导入拖放区：虚线框 + 悬停时的高亮，是「可以往里放东西」的唯一提示。 */
-.sm-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:22px 16px;border:1.5px dashed var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);cursor:pointer;transition:border-color .12s ease,background .12s ease}
+.sm-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;padding:22px 16px;border:1.5px dashed var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);transition:border-color .12s ease,background .12s ease}
 .sm-drop:hover,.sm-drop.is-over{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
 .sm-drop:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
 .sm-drop-icon{display:inline-flex;opacity:.6}
 .sm-drop-text{font-size:13px;line-height:20px}
-.sm-drop-hint{font-size:11.5px;line-height:16px;opacity:.62;text-decoration:underline;text-underline-offset:2px}
-/* 原生 file input 隐藏起来，由拖放区代它接受点击。 */
+.sm-drop-hint{font-size:11.5px;line-height:16px;opacity:.62;text-align:center}
+/* 文件 / 文件夹两个选择按钮：拖放区本身不再是可点元素，避免嵌套交互。 */
+.sm-drop-actions{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;margin-top:5px}
+.sm-drop-btn{height:26px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l2);border-radius:999px;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;line-height:16px;cursor:pointer}
+.sm-drop-btn:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-border-l1))}
+.sm-drop-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
+/* 原生 file input 隐藏起来，由上面的按钮代它接受点击。 */
 .sm-file-input{display:none}
 .sm-import-queue{display:flex;flex-direction:column;gap:6px;min-width:0}
 .sm-import-queue-head{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11.5px;line-height:16px;color:var(--dsw-alias-label-secondary)}

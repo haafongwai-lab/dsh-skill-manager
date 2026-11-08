@@ -21,6 +21,7 @@
  *   GET  /skills?cwd=     列出全部技能（合并视图 + 可写性 + 覆盖层）
  *   GET  /skill?name=     全文、绝对路径、frontmatter 原文
  *   POST /skill/save      新建或更新（{ name, description, content, whenToUse, target, previousName }）
+ *   POST /skill/import    批量导入（{ items: [{ type: 'file' | 'folder', ... }], target }）
  *   POST /skill/delete    删除（{ name }）
  *   POST /skill/toggle    启停模型可见性（{ name, enabled }）
  */
@@ -28,14 +29,18 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
-import { SKILL_NAME, parseSkillMarkdown, renderSkillFile, splitFrontmatter, withModelInvocation } from './skill-file.js'
+import { SKILL_NAME, ensureSkillFrontmatter, parseSkillMarkdown, renderSkillFile, splitFrontmatter, withModelInvocation } from './skill-file.js'
 
 export const name = 'dsh-skill-manager'
-const MAX_BODY_BYTES = 2 * 1024 * 1024
+// 文件夹要装得下 references / scripts / assets，请求体得比散装 Markdown 宽裕。
+const MAX_BODY_BYTES = 8 * 1024 * 1024
 const DEFAULT_MAX_SKILL_BYTES = 262144
 const MAX_DESCRIPTION = 2000
-/** 一次导入的文件数上限：再多就该走命令行，不该塞进一个请求体。 */
+/** 一次导入的条目数上限（一个文件夹算一条）：再多就该走命令行。 */
 const MAX_IMPORT_FILES = 200
+/** 单个技能文件夹的文件数与总字节数上限，防止一个请求拖垮磁盘。 */
+const MAX_FOLDER_FILES = 100
+const MAX_FOLDER_BYTES = 4 * 1024 * 1024
 
 export const Config = {
   '~standard': {
@@ -104,6 +109,34 @@ function samePath(a, b) {
 function insideRoot(dir, root) {
   const rel = relative(resolve(root), resolve(dir))
   return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel) && !rel.includes(`..${sep}`)
+}
+
+/**
+ * 文件夹里每个文件的相对路径都必须是安全的相对路径。
+ *
+ * 客户端可能来自任何浏览器，`webkitRelativePath` 也不是可信输入：任何
+ * `..`、绝对路径、盘符、空段、Windows 保留字符都直接拒掉，绝不让它们
+ * 有机会参与 join()。
+ */
+function safeRelativePath(value) {
+  if (typeof value !== 'string') return undefined
+  const path = value.replace(/\\/g, '/').trim()
+  if (!path || path.includes('\u0000')) return undefined
+  if (path.startsWith('/') || /^[A-Za-z]:\//.test(path)) return undefined
+  const parts = path.split('/')
+  if (parts.some((part) => part === '' || part === '.' || part === '..' || /[<>:"|?*]/.test(part))) return undefined
+  return parts.join('/')
+}
+
+/** 文件夹里的文件按二进制搬运：客户端给 base64（也接受纯文本，便于脚本/测试）。 */
+function decodeImportFile(entry) {
+  if (!entry || typeof entry !== 'object') return undefined
+  if (typeof entry.text === 'string') return Buffer.from(entry.text, 'utf8')
+  if (typeof entry.data === 'string') {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(entry.data)) return undefined
+    return Buffer.from(entry.data, 'base64')
+  }
+  return undefined
 }
 
 function resolveTarget(roots, targetId, skillName) {
@@ -395,7 +428,11 @@ function registerRoutes(sub, deps) {
     const target = resolveTarget(roots, input.target, skillName)
     if (!target) return { ok: false, status: 400, error: 'invalid-target' }
 
-    const text = renderSkillFile({ name: skillName, description, content, whenToUse, modelInvocable })
+    // 散装 Markdown 由本插件渲染；文件夹导入则原样保留导入的 SKILL.md 字节
+    // （上面已补齐必需的 frontmatter），不能把它重排成插件生成的样子。
+    const text = typeof input.raw === 'string'
+      ? input.raw
+      : renderSkillFile({ name: skillName, description, content, whenToUse, modelInvocable })
     const bytes = Buffer.byteLength(text, 'utf8')
     if (bytes > config.maxSkillBytes) {
       return { ok: false, status: 413, error: 'too-large', maxBytes: config.maxSkillBytes }
@@ -444,11 +481,16 @@ function registerRoutes(sub, deps) {
   })
 
   /**
-   * 导入：把一批 Markdown 原文解析成技能再写入。
+   * 导入：把一批 Markdown 原文或整个技能文件夹写成技能。
    *
    * 逐条独立处理并回报每一条的结果 —— 一批里有一个坏文件，不该让其余九个
    * 也进不来。同名技能按「覆盖」处理（这正是重新导入一份配置想做的事），
    * 但会在报告里标出 created / updated，不假装都是新建。
+   *
+   * 请求体用 `items` 混排两种条目，报告顺序与 items 一一对应：
+   *   { type: 'file',   name, text }
+   *   { type: 'folder', name, files: [{ path, data(base64) | text }] }
+   * 旧版只传 `files` 的请求仍然兼容（散装 Markdown）。
    */
   sub.webServer.register({
     kind: 'exact',
@@ -458,9 +500,13 @@ function registerRoutes(sub, deps) {
       if (!config.allowWrite) return sendJson(res, 403, { ok: false, error: 'read-only' })
       try {
         const body = await readJsonBody(req)
-        const files = Array.isArray(body.files) ? body.files : []
-        if (files.length === 0) return sendJson(res, 400, { ok: false, error: 'empty-import' })
-        if (files.length > MAX_IMPORT_FILES) {
+        const items = Array.isArray(body.items)
+          ? body.items
+          : (Array.isArray(body.files)
+            ? body.files.map((file) => ({ ...file, type: 'file' }))
+            : [])
+        if (items.length === 0) return sendJson(res, 400, { ok: false, error: 'empty-import' })
+        if (items.length > MAX_IMPORT_FILES) {
           return sendJson(res, 413, { ok: false, error: 'too-many-files', max: MAX_IMPORT_FILES })
         }
 
@@ -471,10 +517,105 @@ function registerRoutes(sub, deps) {
         const existing = new Set()
         for (const skill of (await collectAll(cwd, viewOptions(cwd))).skills) existing.add(skill.name)
 
+        /**
+         * 写一个技能文件夹：SKILL.md 仍走 writeSkill（同一套校验 + 原子写），
+         * 其余文件按相对路径二进制原样落到同一个目录。
+         *
+         * 与「散装 Markdown」不同，文件夹导入保留 SKILL.md 原文字节（只补齐
+         * 必需的 frontmatter），因为这类技能常带平台不认识的元数据、脚本与
+         * references —— 重排成插件生成的样子等于把别人的技能改坏了。
+         */
+        async function writeFolder(item) {
+          const label = typeof item.name === 'string' && item.name.length > 0 ? item.name : 'folder'
+          const entries = Array.isArray(item.files) ? item.files : []
+          if (entries.length === 0) return { ok: false, error: 'empty-folder' }
+          if (entries.length > MAX_FOLDER_FILES) {
+            return { ok: false, error: 'too-many-folder-files', max: MAX_FOLDER_FILES }
+          }
+
+          const decoded = []
+          let totalBytes = 0
+          for (const entry of entries) {
+            const path = safeRelativePath(entry && entry.path)
+            if (!path) return { ok: false, error: 'invalid-path' }
+            const buffer = decodeImportFile(entry)
+            if (!buffer) return { ok: false, error: 'invalid-file' }
+            totalBytes += buffer.length
+            if (totalBytes > MAX_FOLDER_BYTES) return { ok: false, error: 'folder-too-large' }
+            decoded.push({ path, buffer })
+          }
+
+          const skillMd = decoded.find((entry) => entry.path.toLowerCase() === 'skill.md')
+          if (!skillMd) return { ok: false, error: 'missing-skill-md' }
+          const raw = skillMd.buffer.toString('utf8').replace(/^\uFEFF/, '')
+          if (raw.trim().length === 0) return { ok: false, error: 'empty-file' }
+          if (skillMd.buffer.length > config.maxSkillBytes) {
+            return { ok: false, error: 'too-large', maxBytes: config.maxSkillBytes }
+          }
+
+          const parsed = parseSkillMarkdown(raw, label)
+          if (!SKILL_NAME.test(parsed.name)) return { ok: false, error: 'invalid-name', name: parsed.name }
+          if (parsed.description.length === 0) return { ok: false, error: 'empty-description', name: parsed.name }
+
+          const text = ensureSkillFrontmatter(raw, {
+            name: parsed.name,
+            description: parsed.description,
+            whenToUse: parsed.whenToUse,
+            modelInvocable: parsed.modelInvocable,
+          })
+          const written = await writeSkill({
+            name: parsed.name,
+            description: parsed.description,
+            whenToUse: parsed.whenToUse,
+            content: parsed.content,
+            modelInvocable: parsed.modelInvocable,
+            target: targetId,
+            cwd,
+            raw: text,
+          })
+          if (!written.ok) return { ok: false, error: written.error, name: parsed.name }
+
+          // 附属文件（references / scripts / assets…）按原路径落到技能目录里。
+          const dir = dirname(written.path)
+          try {
+            for (const entry of decoded) {
+              if (entry.path.toLowerCase() === 'skill.md') continue
+              const dest = join(dir, entry.path)
+              if (!insideRoot(dest, dir)) return { ok: false, error: 'invalid-path', name: written.name }
+              await mkdir(dirname(dest), { recursive: true })
+              const tmp = `${dest}.${process.pid}.tmp`
+              await writeFile(tmp, entry.buffer)
+              await rename(tmp, dest)
+            }
+          } catch (error) {
+            warn(`failed to copy skill folder ${label}:`, String((error && error.message) || error))
+            return { ok: false, error: 'write-failed', name: written.name }
+          }
+          return { ok: true, name: written.name, created: !existing.has(written.name), target: written.target }
+        }
+
         const report = []
-        for (const file of files) {
-          const filename = typeof file.name === 'string' ? file.name : ''
-          const text = typeof file.text === 'string' ? file.text : ''
+        for (const item of items) {
+          const isFolder = Boolean(item && item.type === 'folder')
+          const filename = item && typeof item.name === 'string' ? item.name : ''
+          if (!item || typeof item !== 'object') {
+            report.push({ ok: false, filename, error: 'invalid-item' })
+            continue
+          }
+
+          if (isFolder) {
+            try {
+              const result = await writeFolder(item)
+              report.push({ ok: result.ok, filename, kind: 'folder', ...result })
+              if (result.ok) existing.add(result.name)
+            } catch (error) {
+              report.push({ ok: false, filename, kind: 'folder', error: String((error && error.message) || error) })
+            }
+            continue
+          }
+
+          // 散装 Markdown：与旧版完全一样，一个文件就是一条技能。
+          const text = typeof item.text === 'string' ? item.text : ''
           if (text.trim().length === 0) {
             report.push({ ok: false, filename, error: 'empty-file' })
             continue

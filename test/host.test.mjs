@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { SKILL_NAME, normalizeName, parseSkillMarkdown, quoteYaml, renderSkillFile, splitFrontmatter, withModelInvocation } from '../skill-file.js'
+import { SKILL_NAME, ensureSkillFrontmatter, normalizeName, parseSkillMarkdown, quoteYaml, renderSkillFile, splitFrontmatter, withModelInvocation } from '../skill-file.js'
 
 test('Config 收敛默认值与非法输入', async () => {
   process.env.DSH_HOME = join(tmpdir(), 'sm-host-test-home')
@@ -239,5 +239,64 @@ test('normalizeName 把任意文件名收敛成合法技能名', () => {
   for (const input of ['My Skill.md', 'some_thing.MD', 'a---b']) {
     assert.ok(SKILL_NAME.test(normalizeName(input)), input)
   }
+})
+
+// ---------------------------------------------------------------------------
+// 文件夹导入
+// ---------------------------------------------------------------------------
+
+test('补齐 frontmatter：只补缺的 name / description，其余字节原样保留', () => {
+  const raw = [
+    '---',
+    'description: keep me',
+    '# a comment the author wrote',
+    'allowed-tools: Read, Bash',
+    '---',
+    '',
+    '# Body',
+    'line',
+  ].join('\n')
+  const next = ensureSkillFrontmatter(raw, {
+    name: 'imported-skill',
+    description: 'ignored because already present',
+    whenToUse: 'on demand',
+    modelInvocable: false,
+  })
+  assert.match(next, /^---\n/)
+  assert.match(next, /name: imported-skill/)
+  assert.match(next, /description: keep me/)
+  // 别人的元数据、注释、正文一个字都不能被重排掉。
+  assert.ok(next.includes('# a comment the author wrote'))
+  assert.ok(next.includes('allowed-tools: Read, Bash'))
+  assert.ok(next.includes('whenToUse: on demand'))
+  assert.match(next, /disable-model-invocation: true/)
+  assert.ok(next.endsWith('\n\n# Body\nline'))
+
+  // 已有 name 时不覆盖，空值时才补。
+  const withName = ensureSkillFrontmatter('---\nname: original\n---\n\nbody', { name: 'other', description: 'd' })
+  assert.match(withName, /name: original/)
+  assert.ok(!withName.includes('name: other'))
+  const empty = ensureSkillFrontmatter('---\nname:\ndescription:\n---\n\nbody', { name: 'filled', description: 'd' })
+  assert.match(empty, /name: filled/)
+  assert.match(empty, /description: d/)
+})
+
+test('没有 frontmatter 的 SKILL.md 补最小头，正文不动', () => {
+  const next = ensureSkillFrontmatter('# Title\n\ntext', {
+    name: 'plain', description: 'd', whenToUse: '', modelInvocable: true,
+  })
+  assert.equal(next, '---\nname: plain\ndescription: d\n---\n\n# Title\n\ntext')
+})
+
+test('导入路由同时处理散装文件与文件夹，且文件夹走同一条写入路径', async () => {
+  const source = await readFile(new URL('../index.js', import.meta.url), 'utf8')
+  assert.match(source, /type === 'folder'/, 'folder branch missing')
+  assert.match(source, /async function writeFolder\(/, 'folder writer missing')
+  assert.match(source, /missing-skill-md/, 'a folder without SKILL.md must be rejected')
+  assert.match(source, /ensureSkillFrontmatter\(/, 'imported SKILL.md must keep its bytes')
+  assert.match(source, /safeRelativePath\(/, 'folder paths must be validated')
+  assert.match(source, /insideRoot\(dest, dir\)/, 'aux files must stay inside the skill dir')
+  const importBlock = source.slice(source.indexOf("path: `${prefix}/skill/import`"))
+  assert.match(importBlock, /await writeSkill\(/, 'import must reuse writeSkill')
 })
 
